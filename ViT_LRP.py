@@ -4,11 +4,11 @@ Hacked together by / Copyright 2020 Ross Wightman
 import torch
 import torch.nn as nn
 from einops import rearrange
-from layers_ours import *
+# from layer_helpers import *
 
 from helpers import load_pretrained
 from weight_init import trunc_normal_
-from layer_helpers import to_2tuple
+from layer_helpers import *
 
 
 def _cfg(url='', **kwargs):

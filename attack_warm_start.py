@@ -43,7 +43,6 @@ def project_kern(kern_size):
 
 
 def project_noise(x, stack_kern, padding_size):
-    # x = tf.pad(x, [[0,0],[kern_size,kern_size],[kern_size,kern_size],[0,0]], "CONSTANT")
     x = F.conv2d(x, stack_kern, padding=(padding_size, padding_size), groups=3)
     return x
 
@@ -63,6 +62,24 @@ def clip_by_tensor(t, t_min, t_max):
 
 stack_kern, padding_size = project_kern(3)
 
+
+def tensor2im_norm(image_tensor, imtype=np.uint8):
+    image_numpy = image_tensor.detach().cpu().float().numpy()
+    image_numpy = image_numpy - np.min(image_numpy)
+    image_numpy = image_numpy / np.max(image_numpy) * 255
+    image_numpy = np.maximum(image_numpy, 0)
+    image_numpy = np.minimum(image_numpy, 255)
+    return image_numpy.astype(imtype)
+
+
+def gen_cam(soft_policys):
+    soft_map = soft_policys[1][:,1:]
+    hm = soft_map.view(soft_map.size(0), 14, 14)
+    hm = hm.squeeze()
+    hm = torch.clamp(hm, 0.48, 1)
+    vis = tensor2im_norm(hm.view(14, 14, 1))
+    
+    return vis
 
 def show_cam_on_image(img, mask):
     heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
@@ -106,26 +123,19 @@ def local_adv(device, model, att_gen, criterion, img, label, eps, ben_cam, attac
         step = eps / iterations
 
     if attack_type == 'pifgsm':
-        # alpha = step = eps / iterations
         alpha_beta = step * amp
         gamma = alpha_beta
         amplification = 0.0
-        # images_min = clip_by_tensor(img - eps, 0.0, 1.0)
-        # images_max = clip_by_tensor(img + eps, 0.0, 1.0)
+   
 
     for j in range(10):
       out_adv = model(normalize(adv.clone(), mean=mean, std=std))
       loss = 0
-      # if isinstance(out_adv, list) and index == 'all':
-        # print('Eldor')
+ 
       loss = 0
       for idx in range(len(out_adv)):
         loss += criterion(out_adv[idx], label)
-        # loss += F.nll_loss(out_adv[idx], label, reduction='sum')
-      # elif isinstance(out_adv, list) and index == 'last':
-      #   loss = criterion(out_adv[-1], label)
-      # else:
-        # loss = criterion(out_adv, label)
+
 
       loss.backward()
 
@@ -150,7 +160,7 @@ def local_adv(device, model, att_gen, criterion, img, label, eps, ben_cam, attac
             adv_r = input_diversity(adv)
         else:
             adv_r = adv
-        # out_adv = model(normalize(torch.nn.functional.interpolate(adv_r.clone(), (224, 224)), mean=mean, std=std))
+       
         out_adv = model(normalize(adv_r.clone(), mean=mean, std=std))
 
         adv_cam = generate_visualization_(adv_r.clone().squeeze(0), device, att_gen)
@@ -176,15 +186,9 @@ def local_adv(device, model, att_gen, criterion, img, label, eps, ben_cam, attac
         by_one = torch.tensor(conf_mat, device=device)
 
         loss = 0
-        # if isinstance(out_adv, list) and index == 'all':
-            # loss = 0
+        
         for idx in range(len(out_adv)):
           loss += criterion(out_adv[idx], label)
-          # loss +=  (-by_one * F.log_softmax(out_adv[idx])).sum()
-        # elif isinstance(out_adv, list) and index == 'last':
-            # loss = criterion(out_adv[-1], label)
-        # else:
-            # loss = criterion(out_adv, label)
 
         loss += c_now * loss_cam.item()
 
@@ -298,4 +302,131 @@ def local_adv_target(model, att_gen, criterion, img, target, eps, ben_cam, attac
             adv.data = torch.where(adv.data < img.data - eps, img.data - eps, adv.data)
         adv.data.clamp_(0.0, 1.0)
         adv.grad.data.zero_()
+    return adv.detach(), adv_cam
+
+def local_adv_red(device, model, att_gen, criterion, img, label, eps, ben_cam, attack_type, iters, mean, std, index, apply_ti=False, amp=10):
+
+    adv = img.detach()
+
+    if attack_type == 'rfgsm':
+        alpha = 2 / 255
+        adv = adv + alpha * torch.randn(img.shape).detach().sign()
+        eps = eps - alpha
+
+    adv.requires_grad = True
+
+    if attack_type in ['fgsm', 'rfgsm']:
+        iterations = 1
+    else:
+        iterations = iters
+
+    if attack_type == 'pgd':
+        step = 2 / 255
+    else:
+        step = eps / iterations
+
+    if attack_type == 'pifgsm':
+        alpha_beta = step * amp
+        gamma = alpha_beta
+        amplification = 0.0
+
+    for j in range(10):
+      out_adv = model(normalize(adv.clone(), mean=mean, std=std))
+      loss = 0
+      
+      loss = 0
+      for idx in range(len(out_adv)):
+        loss += criterion(out_adv[idx], label)
+
+      loss.backward()
+
+      adv_noise = adv.grad
+      adv.data = adv.data + step * adv_noise.sign()
+      
+      adv.data = torch.where(adv.data > img.data + eps, img.data + eps, adv.data)
+      adv.data = torch.where(adv.data < img.data - eps, img.data - eps, adv.data)
+      adv.data.clamp_(0.0, 1.0)
+      adv.grad.data.zero_()
+
+
+    adv_noise = 0
+    label_indices = np.arange(0, 1, dtype=np.int64)
+
+    c_begin, c_final = 10., 10. * 2
+    c_inc = (c_final - c_begin) / iterations
+    c_now = 10.0
+
+    for j in range(iterations):
+        if attack_type == 'dim':
+            adv_r = input_diversity(adv)
+        else:
+            adv_r = adv
+        out_adv = model(normalize(adv_r.clone(), mean=mean, std=std))
+
+        
+        with torch.no_grad():
+            _, _, soft_policys = att_gen(normalize(adv_r.clone(), mean=mean, std=std))
+                
+        adv_cam = gen_cam(soft_policys)
+
+        c_now += c_inc
+
+        adv_cam_flatten = torch.tensor(adv_cam).view(1, -1)
+        adv_cam_flatten = adv_cam_flatten - adv_cam_flatten.min(1, True)[0]
+        adv_cam_flatten = adv_cam_flatten / adv_cam_flatten.max(1, True)[0]
+
+        ben_cam_flatten = torch.tensor(ben_cam).view(1, -1)
+        ben_cam_flatten = ben_cam_flatten - ben_cam_flatten.min(1, True)[0]
+        ben_cam_flatten = ben_cam_flatten / ben_cam_flatten.max(1, True)[0]
+
+        diff = adv_cam_flatten - ben_cam_flatten
+        loss_cam = (diff * diff).mean(1)
+
+        conf_base = 0.95 + j / iterations * 0.04
+        conf = np.random.uniform(conf_base, 1, size=(1, )).astype(np.float32)
+        conf_mat = ((1 - conf) / 9.).reshape((1, 1)).repeat(1000, 1)
+        conf_mat[label_indices, label] = conf
+
+        by_one = torch.tensor(conf_mat, device='cuda')
+
+        loss = 0
+        for idx in range(len(out_adv)):
+          loss += criterion(out_adv[idx], label)
+
+        loss += c_now * loss_cam.item()
+
+        loss.backward()
+        if apply_ti:
+            adv.grad = gaussian_blur(adv.grad, kernel_size=(15, 15), sigma=(3, 3))
+
+        if attack_type == 'mifgsm' or attack_type == 'dim':
+            adv.grad = adv.grad / torch.mean(torch.abs(adv.grad), dim=(1, 2, 3), keepdim=True)
+            adv_noise = adv_noise + adv.grad
+        else:
+            adv_noise = adv.grad
+
+        # Optimization step
+        if attack_type == 'pifgsm':
+            amplification += alpha_beta * adv_noise.sign()
+            cut_noise = torch.clamp(abs(amplification) - eps, 0, 10000.0) * torch.sign(amplification)
+            projection = gamma * torch.sign(project_noise(cut_noise, stack_kern, padding_size))
+            amplification += projection
+
+            adv.data = adv.data + alpha_beta * adv_noise.sign() + projection
+            adv.data = torch.where(adv.data > img.data + eps, img.data + eps, adv.data)
+            adv.data = torch.where(adv.data < img.data - eps, img.data - eps, adv.data)
+            adv.data.clamp_(0.0, 1.0)
+
+        else:
+            adv.data = adv.data + step * adv_noise.sign()
+
+            # Projection
+            if attack_type == 'pgd':
+                adv.data = torch.where(adv.data > img.data + eps, img.data + eps, adv.data)
+                adv.data = torch.where(adv.data < img.data - eps, img.data - eps, adv.data)
+
+            adv.data.clamp_(0.0, 1.0)
+
+        adv.grad.data.zero_()
+
     return adv.detach(), adv_cam
