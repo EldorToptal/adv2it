@@ -9,10 +9,16 @@ pip install -r requirements.txt
 ## Quickstart
 Run the demo using the following script:
 ```bash
-python test.py --img_path images/fold_0.npz --src_model deit_base_patch16_224 --tar_model lrp_b --attack_type pgd --eps 8 --index “all” --batch_size 1
+python test_LRP.py --img_path images/fold_0.npz --src_model deit_base_patch16_224 --tar_model lrp_b --attack_type pgd --eps 8 --index “all” --batch_size 1
 ```
 
 The script uses **DeiT-B** model as a source model and **ViT-B** as a target model. The algorithms attacks [Transformer Interpreter](https://github.com/hila-chefer/Transformer-Explainability) model. The models will be downloaded automatically once the script is run. 
+
+Run the demo using RED interpreter:
+```bash
+python test_RED.py --img_path images/fold_0.npz --src_model deit_base_patch16_224 --tar_model lrp_b --attack_type pgd --eps 8 --index “all” --batch_size 1
+```
+
 
 
 ## Input
