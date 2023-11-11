@@ -227,7 +227,7 @@ def start():
             label = clean_out.argmax(dim=-1)
             clean_acc += torch.sum(clean_out.argmax(dim=-1) == label).item()
 
-            adv, adv_cam = local_adv(device, src_model, tar_model, criterion, img, label, eps, ben_cam, attack_type=args.attack_type, iters=args.iter,
+            adv, adv_cam = local_adv_red(device, src_model, tar_model, criterion, img, label, eps, ben_cam, attack_type=args.attack_type, iters=args.iter,
                                 std=src_std, mean=src_mean, index=args.index, apply_ti=args.apply_ti)
 
               
